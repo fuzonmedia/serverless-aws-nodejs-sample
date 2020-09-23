@@ -1,0 +1,423 @@
+service: agents-api-v2
+
+frameworkVersion: ">=1.11.0 <2.0.0"
+
+custom:
+  env_vars: ${file(./config.${self:provider.stage}.yml)}
+  secret_env_vars: ${file(./config.${self:provider.stage}.secret.yml)}
+
+# Node.js 
+provider:
+  name: aws
+  runtime: nodejs6.10
+  stage: ${opt:stage}
+  # Branch: develop -> stage 'dev'
+  # Branch: master -> stage 'prod'
+  region: ap-southeast-2
+  versionFunctions: false
+  timeout: 15
+  # Set up DynamoDB Permissions (example: https://github.com/serverless/examples/blob/master/aws-node-rest-api-with-dynamodb/serverless.yml)
+
+  # Unable to get these variables to load into ${env:VAR_NAME} using a file reference
+  # Therefore using custom variable in between.
+  environment:
+    DEBUG: '*'
+    APP_HOST: ${self:custom.env_vars.APP_HOST}
+    REDIS_HOST: ${self:custom.env_vars.REDIS_HOST}
+    REDIS_PORT: ${self:custom.env_vars.REDIS_PORT}
+    REDIS_TTL: ${self:custom.env_vars.REDIS_TTL}
+    REDIS_DISABLED: ${self:custom.env_vars.REDIS_DISABLED}
+    API_DOMAIN_CLIENT_ID: ${self:custom.secret_env_vars.API_DOMAIN_CLIENT_ID}
+    API_DOMAIN_CLIENT_SECRET: ${self:custom.secret_env_vars.API_DOMAIN_CLIENT_SECRET}
+    PASSWORD_SECRET_SALT: "SAMPLE"
+    DYNAMODB_USERS_TABLE: agentsUsers
+    DYNAMODB_PROPERTIES_TABLE: agentsProperties
+    DYNAMODB_PROPERTY_FEATURES_TABLE: agentsPropertyFeatures
+    DYNAMODB_PHOTOS_TABLE: agentsPhotos
+    DYNAMODB_storyS_TABLE: agentsstorys
+    DYNAMODB_AREAMAP_TABLE: agentsAreaMapping
+    DYNAMODB_PROPOSALS_TABLE: agentsProposals
+    DYNAMODB_MESSAGES_TABLE: agentsMessages
+    DYNAMODB_SALES_HISTORY_TABLE: ha_listing
+    DYNAMODB_NEARBY_POI_TABLE: agentsNearbyPOI
+    DYNAMODB_REVIEWS_TABLE: agentsReviews
+    SENDGRID_API_KEY: "hidden"
+    SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/T31C80W69/B7013017U/hidden"
+    AWS_S3_UPLOAD_KEY: "hidden"
+    AWS_S3_UPLOAD_SECRET: "hidden"
+    AWS_S3_BUCKET: "unprocessed-images.agents.com.au"
+    AWS_S3_BUCKET_PROCESSED: "images.agents.com.au"
+    IMAGES_ORIGIN_URL: "http://images.agents.com.au"
+    TWILIO_API_KEY: "hidden"
+    PHONE_COUNTRY_CODE: "61"
+    SENDBIRD_APP_ID: "hidden"
+    GOOGLE_API_KEY: ${self:custom.secret_env_vars.GOOGLE_API_KEY}
+
+  # When deploying the service for the first time, comment out the vpc key, then
+  # deploy again with it included again.
+  vpc:
+    securityGroupIds:
+      - Fn::GetAtt: ServerlessSecurityGroup.GroupId #ServerlessElasticacheSecurityGroup.GroupId
+    subnetIds:
+      - ${self:custom.env_vars.SUBNET_ID_A}
+      - ${self:custom.env_vars.SUBNET_ID_B}
+      - ${self:custom.env_vars.SUBNET_ID_C}
+  iamRoleStatements:
+    # Allow the lambda function permission to create EINs, which is part of the
+    # AWSLambdaVPCAccessExecutionRole
+    - Effect: "Allow"
+      Action:
+        - "ec2:CreateNetworkInterface"
+        - "ec2:DescribeNetworkInterfaces"
+        - "ec2:DeleteNetworkInterface"
+      Resource: "*"
+    - Effect: Allow
+      Action:
+        - dynamodb:Query
+        - dynamodb:Scan
+        - dynamodb:GetItem
+        - dynamodb:PutItem
+        - dynamodb:UpdateItem
+        - dynamodb:DeleteItem
+        - dynamodb:BatchGetItem
+      Resource: "arn:aws:dynamodb:${self:provider.region}:*:table/*"
+    - Effect: Allow
+      Action:
+        - dynamodb:DescribeStream
+        - dynamodb:GetRecords
+        - dynamodb:GetShardIterator
+        - dynamodb:ListStreams
+      Resource: "arn:aws:dynamodb:${self:provider.region}:*:table/*/stream/*"
+
+functions:
+  # Endpoints where HTTP get is not supported
+  getNotSupported:
+    handler: handler.getNotSupported
+    events:
+      - http:
+          path: /register
+          method: get
+          cors: true
+      - http:
+          path: /
+          method: get
+          cors: true
+
+  currentListings:
+    handler: lib/current-listings.get
+    description: Retrieve current listings by agent id
+    events:
+      - http:
+          path: /current-listings
+          method: get
+          cors: true
+
+  phoneVerification:
+    handler: lib/phone-verification.get
+    description: Phone verification from Twilio
+    events:
+      - http:
+          path: /phone-verification
+          method: get
+          cors: true
+
+  sendbirdWebhook:
+    handler: lib/sendbird-webhook.post
+    description: Sendbird webhook handler
+    events:
+      - http:
+          path: /sendbird-webhook
+          method: post
+          cors: true
+
+  interview:
+    handler: handler.interview
+    description: Interview GET count , set interview (POST)
+    events:
+      - http:
+          path: /interview
+          method: get
+          cors: true
+
+      - http:
+          path: /interview
+          method: post
+          cors: true
+
+  # Register Endpoint
+  register:
+    handler: handler.register2
+    timeout: 20
+    events:
+      - http:
+          path: /register
+          method: post
+          cors: true
+  passwordForgot:
+    handler: lib/password.generateToken
+    events:
+      - http:
+          path: /forgot-password
+          method: post
+          cors: true
+  passwordReset:
+    handler: lib/password.reset
+    events:
+      - http:
+          path: /reset-password
+          method: post
+          cors: true
+  passwordEmail:
+    handler: lib/password.mail
+    events:
+      - stream:
+          type: dynamodb
+          arn: arn:aws:dynamodb:ap-southeast-2:969899432009:table/agentsPasswordResetTokens/stream/2017-11-21T09:02:41.026
+          batchSize: 1
+  story:
+    handler: lib/story.list
+    events:
+      - http:
+          path: /story
+          method: get
+          cors: true
+  storyGet:
+    handler: lib/story.get
+    events:
+      - http:
+          path: /story/{id}
+          method: get
+          cors: true
+          request:
+            parameters:
+              paths:
+                id: true
+  storyStore:
+    handler: lib/story.store
+    events:
+      - http:
+          path: /story
+          method: post
+          cors: true
+  storyUpdate:
+    handler: lib/story.update
+    events:
+      - http:
+          path: /story/{id}
+          method: put
+          cors: true
+          request:
+            parameters:
+              paths:
+                id: true
+  storyChange:
+    handler: lib/story.update
+    events:
+      - http:
+          path: /story
+          method: patch
+          cors: true
+  storySendToAgents:
+    handler: lib/story-admin.sendstorysToAgents
+    events:
+      - http:
+          path: /story/send
+          method: post
+          cors: true
+  storyphoto:
+    handler: handler.storyphoto
+    events:
+      - http:
+          path: /story/addphoto
+          method: post
+          cors: true
+  proposal:
+    handler: lib/proposals.get
+    timeout: 30
+    events:
+      - http:
+          path: /proposals
+          method: get
+          cors: true
+
+  proposalStore:
+    handler: handler.proposal
+    timeout: 30
+    events:
+      - http:
+          path: /proposals
+          method: post
+          cors: true
+
+  shortlist:
+    handler: lib/shortlist.get
+    events:
+      - http:
+          path: /shortlist
+          method: get
+          cors: true
+  shortlistChange:
+    handler: handler.shortlist
+    events:
+      - http:
+          path: /shortlist
+          method: post
+          cors: true
+      - http:
+          path: /shortlist
+          method: delete
+          cors: true
+  sales:
+    handler: handler.sales
+    events:
+      - http:
+          path: /sales
+          method: get
+          cors: true
+  verifyemail:
+    handler: handler.verifyemail
+    events:
+      - http:
+          path: /verifyemail
+          method: get
+          cors: true
+  users:
+    handler: lib/users.list
+    events:
+      - http:
+          path: /users
+          method: get
+          cors: true
+  usersGet:
+    handler: lib/users.get
+    events:
+      - http:
+          path: /users/{id}
+          method: get
+          cors: true
+          request:
+            parameters:
+              paths:
+                id: true
+  usersCreate:
+    handler: handler.users
+    events:
+      - http:
+          path: /users
+          method: post
+          cors: true
+  testHttp:
+    handler: lib/test-http.testHttp
+  testHttpAuthentication:
+    handler: lib/test-http.testHttpAuthentication
+  userSlug:
+    handler: lib/slug.create
+    events:
+      - stream:
+          type: dynamodb
+          arn: arn:aws:dynamodb:ap-southeast-2:969899432009:table/agentsUsers/stream/2017-12-01T17:43:59.546
+          batchSize: 1
+  property:
+    handler: handler.property
+    events:
+      - http:
+          path: /property
+          method: get
+          cors: true
+      - http:
+          path: /property
+          method: post
+          cors: true
+  setphotostatus:
+    handler: handler.setphotostatus
+    events:
+      - http:
+          path: /setphotostatus
+          method: get
+          cors: true
+  verifytoken:
+    handler: handler.verifytoken
+    events:
+      - http:
+          path: /isloggedin
+          method: get
+          cors: true
+  profile:
+    handler: lib/profile.get
+    events:
+      - http:
+          path: /profile
+          method: get
+          cors: true
+      - http:
+          path: /profile/{id}
+          method: get
+          cors: true
+          request:
+          parameters:
+            paths:
+              id: true
+  review:
+    handler: handler.review
+    events:
+      - http:
+          path: /reviews
+          method: get
+          cors: true
+      - http:
+          path: /reviews
+          method: post
+          cors: true
+  agents:
+    handler: lib/agents.list
+    events:
+      - http:
+          path: /agents
+          method: get
+          cors: true
+  agentSearch:
+    handler: lib/agents.search
+    events:
+      - http:
+          path: /agents/search
+          method: get
+          cors: true
+  testRedis:
+    handler: lib/test-redis.test
+    timeout: 10
+
+resources:
+  Resources:
+    ServerlessSecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupDescription: SecurityGroup for Serverless Functions
+        VpcId: ${self:custom.env_vars.VPC_ID}
+    ServerlessElasticacheSubnetGroup:
+      Type: AWS::ElastiCache::SubnetGroup
+      Properties:
+        Description: "Cache Subnet Group ${self:provider.stage}"
+        SubnetIds:
+          - ${self:custom.env_vars.SUBNET_ID_A}
+          - ${self:custom.env_vars.SUBNET_ID_B}
+          - ${self:custom.env_vars.SUBNET_ID_C}
+    ServerlessElasticacheCluster:
+      Type: AWS::ElastiCache::CacheCluster
+      Properties:
+        AutoMinorVersionUpgrade: true
+        AZMode: single-az
+        Engine: redis
+        EngineVersion: 3.2.10
+        Port: 6379
+        CacheNodeType: cache.t2.micro
+        NumCacheNodes: 1
+        PreferredMaintenanceWindow: Sun:02:00-Sun:05:00
+        VpcSecurityGroupIds: [{"Fn::GetAtt": [ "ServerlessSecurityGroup", "GroupId"]}]
+        CacheSubnetGroupName:
+          Ref: ServerlessElasticacheSubnetGroup
+package:
+  # individually: true
+  exclude:
+    - README.md
+    - .git/**
+    - docs/**

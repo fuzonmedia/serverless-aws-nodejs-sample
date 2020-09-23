@@ -1,0 +1,10 @@
+VPC_ID: vpc-65568801
+SUBNET_ID_A: subnet-e5f13eac
+SUBNET_ID_B: subnet-054c9062
+SUBNET_ID_C: subnet-7644722f
+REDIS_HOST: hidden.vqi7na.0001.apse2.cache.amazonaws.com
+REDIS_PORT: "6379"
+REDIS_TTL: "86400"
+REDIS_DISABLED: "false"
+APP_ENV: development
+APP_HOST: api-dev.agents.com.au
